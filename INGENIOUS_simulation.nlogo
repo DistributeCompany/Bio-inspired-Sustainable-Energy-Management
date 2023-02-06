@@ -1,31 +1,27 @@
-;REMARK: from version 12 the model has the csv extension to write the outputs to a CSV file
-;This is (probably) not working in the web version
-
 breed [jobs job ]
 breed [workers worker]
 
 jobs-own[
- assigned-worker
- created-at
- processed-at
- queue-grid-position
+ assigned-worker ;id of worker that is assigned or is -1 if no worker is assigned yet
+ created-at ;tick when job is created
+ processed-at ;tick when job is processed
+ queue-grid-position ;position in the job queue grid
 ]
 
 workers-own[
- worker-battery-level
- active?
- current-job
+ worker-battery-level ;level of battery of worker (0%-100%)
+ active? ;indicates if worker is working
+ current-job ;job that worker is processing or -1 if worker is not active
  charging-x-cor
  charging-y-cor
 ]
 
 globals[
  hour; hour of the day
- stimulus-solar
- prop-current-worker
+ prop-current-worker ;probability that worker is going to charger
 
- buffer-battery?
- buf-bat-cap
+ buffer-battery? ;indicates if buffer battery is used
+ buf-bat-cap ;capacity of the buffer battery
 
  ;all x and y coordinates are set in init-visuals
  solar-energy-source-x ;x-pos of solar power source in cable (first patch that has green color)
@@ -36,7 +32,6 @@ globals[
  grid-energy-source-y
  battery-energy-source-x
  battery-energy-source-y
-
  solar-panel-x ;x-pos of solar panel visual reference point
  solar-panel-y ;y-pos of solar panel visual reference point
  windmill-x
@@ -47,116 +42,72 @@ globals[
  battery-y
  charge-station-x
  charge-station-y
+ horizon-y-pos; ;y-position of horizon
 
- horizon-y-pos;
-
- buffer-battery-level ;buffer
-
- x-cor-workers-charging
- y-cor-workers-charging
-
- x-cor-workers-working
- y-cor-workers-working
+ buffer-battery-level ;level of buffer battery in %
 
  ;patch location of first job in queue (initilized at setup)
  x-cor-jobs
  y-cor-jobs
 
+ ;position of job to which worker will be assigned
  x-cor-current-job
  y-cor-current-job
 
- num-jobs
- num-active-workers
+ num-jobs ;number of jobs in system
+ num-active-workers ;number of active workers
 
  ;inputs for size of job-queue
  queue-x ;size of queue in x-direction
  queue-y ;size of queue in y-direction
  queue-increment ;increment of pixels (both in x- and y direction)
+ jobs-on-last-grid-pos ; a maximum of queue-x x queue-y jobs can be visualized, this variable indicates the number of jobs above this amount
 
- jobs-on-last-grid-pos
-
-
- price-mechanism? ;if this is true, it is possible to supply from battery to grid and grid to battery based on the price,
-  ;or to supply from renewable sources to grid and not use it for the charging station although there might be demand
-  ; however, this is future work (TODO)
-
- grid-power-to-battery?
- battery-power-to-grid?
- renewable-power-to-grid?
- renewable-power-to-battery?
- renewable-power-to-charging-station?
- battery-power-to-charging-station?
- grid-power-to-charging-station?
-
+ grid-power-to-battery? ;boolean that indicates if there is a power flow from grid to battery
+ battery-power-to-grid? ;boolean that indicates if there is a power flow from battery to grid
+ renewable-power-to-grid? ;boolean that indicates if there is a power flow from the renewable resources to grid
+ renewable-power-to-battery? ;boolean that indicates if there is a power flow from the renewable resources to battery
+ renewable-power-to-charging-station? ;boolean that indicates if there is a power flow from the renewable resources to charging station
+ battery-power-to-charging-station? ;boolean that indicates if there is a power flow from the battery to charging station
+ grid-power-to-charging-station? ;boolean that indicates if there is a power flow from grid to charging station
 
  renewable-energy-yield ;current production per MINUTE (=tick) in kWm
  renewable-energy-yield-per-hour ;current production per hour in kWh
 
- charging-demand
+ charging-demand ;current demand of energy in kWm from charging station
 
+ renewable-for-consumption ;energy flow renewable energy to charging station in kWm
+ battery-for-consumption ;energy flow from battery to charging station in kWm
+ grid-for-consumption ;energy flow from grid to charging station in kWm
+ renewable-to-battery ;energy flow from renewable energy to battery in kWm
+ renewable-to-grid ;energy flow from renewable energy to grid in kWm
 
- renewable-for-consumption ;share of energy consumption for charging station per tick
- battery-for-consumption
- grid-for-consumption
- renewable-to-battery
- renewable-to-grid
-
- ;globals below are used for the output file. Every 30 ticks the averages are calculated and stored in the output-list
- avg-production
- avg-use-of-production
- avg-use-of-battery
- avg-use-of-grid
- avg-renewable-to-grid
- avg-renewable-to-battery
-
- avg-charging
- avg-working
- avg-idle
-
- avg-queue
-
-
- output-list
-
- wind-energy? ;only used for visualization of energy stream
- solar-energy? ;only used for visualization of energy stream
-
-
-run-experiments?
-current-run
-
+ wind-energy? ;boolean that indicates if wind energy should be visualized
+ solar-energy? ;boolean that indicates if solar energy should be visualized
 ]
 
 patches-own[
-  power-cable
-  power;visualizes power through power cable
-  queue-number
+  power-cable ;indicates if patch is a power cable
+  power ;indicates if there is a power flow through the power cable
+  queue-number ;indicates the queue position for jobs, only applicable in the working area where jobs are created
 ]
 
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;setup;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;SETUP;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 
 to setup
   clear-all
 
-  set run-experiments? false
+  set buffer-battery? buffer-battery ;set user input to global variable
 
-  ;init output list
-  set output-list [["hour" "production" "use of own production" "use of battery" "use of grid" "battery fill rate" "to battery" "to grid" "working (%)" "charging (%)" "idling (%)" "queue"]]
-
-  set buffer-battery? buffer-battery
-
+  ;set buffer capacity if there is a battery
   ifelse buffer-battery?
   [set buf-bat-cap buffer-battery-capacity ]
   [set buf-bat-cap 1] ;to prevent division by zero
 
-  ;note; price-mechanism -> True for future work
-  set price-mechanism? False
-
+  ;init power flows to False
   set grid-power-to-battery? False
   set battery-power-to-grid? False
   set renewable-power-to-grid? False
@@ -165,10 +116,11 @@ to setup
   set battery-power-to-charging-station? False
   set grid-power-to-charging-station? False
 
-
-  set hour 1
+  ;init battery level
   set buffer-battery-level 0
-  set-hour
+
+  set hour 1 ;init hour
+  set-hour ;sets hour of the day as label in the left uppercorner
 
   ;calculate the yield of renewable energy the first hour
   calculate-renewable-energy-yield
@@ -182,44 +134,37 @@ to setup
   ask patches [
     set power-cable Nobody
     set power False
-]
+  ]
 
-
+  ;init of renewable energy source visualizations
   set wind-energy? True
   set solar-energy? False
 
   ;init visualisation of power elements on screen
   init-visuals
 
-  ;set of solar power yield over the day (24h)
-  ;TODO: make percentages of Watt piek (according to some Normal-distribution)
-
-
-
   ;init workers
   setup-workers
-
-  ;set active to false
 
   ;set global variable with number of active workers
   ;set num-active-workers count workers with [active? = True]
   set num-active-workers 0
+
   ;set position of first job in queue (origin of queuing grid)
   set x-cor-jobs 44
   set y-cor-jobs -45
 
-
   ;init queuing grid (assign queue-ids to patches in grid)
   setup-queue-grid
-
 
   reset-ticks
 
 end
 
 
-
 to setup-queue-grid
+  ;creates job queue grid with size queue-x by queue-y
+
   ;determine total size of queue (i.e., number of jobs that the queue can store)
   let grid-size (queue-x * queue-y)
   let counter 1
@@ -230,14 +175,10 @@ to setup-queue-grid
   while [column <= queue-x][
 
     ifelse counter mod (queue-y + 1) != 0 [
-      ask patches with [pxcor = current-x and pycor = (current-y + ((counter - 1) * queue-increment))]
+      ask patches with [pxcor = current-x and pycor = (current-y + ((counter - 1) * queue-increment))] ;determine next queue position, queue-increment = interdistance betwee two queue positions
       [
-        ;show patch-at current-x (current-y + ((counter - 1) * queue-increment))
-        set queue-number ((column - 1) * queue-y) + counter
-        ;set plabel queue-number
-       ; show patch-at (x-cor-jobs + (counter * queue-increment)) (y-cor-jobs + (counter * queue-increment))
+        set queue-number ((column - 1) * queue-y) + counter ;set queue number to patch
       ]
-
     ]
     [set current-x (current-x + queue-increment)
      set current-y y-cor-jobs
@@ -250,7 +191,6 @@ to setup-queue-grid
 end
 
 
-
 to setup-workers
   ;set position of workers when charging
   let x-starting -36
@@ -258,10 +198,10 @@ to setup-workers
   let x x-starting
   let y y-starting
 
-
   ;init workers
   foreach (n-values number-of-workers [i -> i]) [ i ->
 
+    ;create worker on patch
     ask patch x y [
       sprout-workers 1 [ set size 5
         set shape "truck"
@@ -284,7 +224,6 @@ to setup-workers
 end
 
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;GO;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -292,7 +231,7 @@ end
 ;procedure starts after pressing the go-button
 to go
 
-
+  ;check that the sum of param-energy, param-battery and param-jobs should be 1
   if param-energy + param-battery + param-jobs != 1
   [user-message ("Make sure that the sum of param-energy, param-battery and param-jobs is equal to 1. Click halt, reconfigure the parameters, and then click the GO button again.")]
 
@@ -302,12 +241,14 @@ to go
     set hour hour + 1
     set-hour
 
+    ;the amount of renewable energy yield changes every hour
     calculate-renewable-energy-yield
 
     ;init jobs
     create-new-jobs
     update-visuals
 
+    ;only visualize solar energy during day hours
     ifelse hour > 6 and hour < 21 [
       set solar-energy? True
     ]
@@ -316,13 +257,8 @@ to go
     ]
   ]
 
-
-
-
-
-  ;if no solar production, but vehicles require charging:
+  ;if there is not enough renewable energy production, but vehicles require charging:
   ;first, check whether battery buffer can be used
-  ;TODO: seems like a common-sense static rule, but a dynamic rule might also be useful, e.g., when grid-power is currently cheaper than 'using the battery')
   ;second, if battery buffer is depleted, call receive-grid-energy procedure
 
 
@@ -330,12 +266,11 @@ to go
    ask workers [
      if active? = True [
        set worker-battery-level (worker-battery-level - (energy-consumption *(1 / 60)))
-      if (worker-battery-level < min-charge) [set color yellow]
+      if (worker-battery-level < energy-consumption) [set color yellow]
       if worker-battery-level < 0 [
         set worker-battery-level 0
         set color red]
        set label round(worker-battery-level)
-
      ]
    ]
 
@@ -344,26 +279,27 @@ to go
    ask workers [
      if (active? = False) and (worker-battery-level < 100) [
        set worker-battery-level (worker-battery-level + (charging-speed *(1 / 60)))
-      if (worker-battery-level < min-charge) [set color yellow]
-      if (worker-battery-level > min-charge) [set color green]
+      if (worker-battery-level < energy-consumption) [set color yellow]
+      if (worker-battery-level > energy-consumption) [set color green]
        if worker-battery-level > 100 [
          set worker-battery-level 100]
        set label round(worker-battery-level)
       set charging-demand charging-demand + worker-battery-capacity * ((charging-speed / 100) / 60)
-
-
      ]
    ]
-
 
   ;check if jobs are finished at current tick
   if any? jobs with [processed-at + 60 = ticks AND processed-at > -1][
     finish-job
   ]
 
+  ;set num-jobs
+  set num-jobs count jobs
+
+  ;update global variable indicating number of active worker
+  set num-active-workers count workers with [active? = True]
 
   ;assign workers to jobs, if not all workers are already active
-  ;TODO: might occur that worker IS active, but battery is depleted?
   if any? workers with [active? = false][
     assign-workers-to-jobs]
 
@@ -373,28 +309,18 @@ to go
   ;visualizes the power streams based on the demand from the charging station
   visualize-power-streams
 
-  ;set num-jobs
-  set num-jobs count jobs
-
-  ;update global variable indicating number of active worker
-  set num-active-workers count workers with [active? = True]
-
-
-
- ;increase tick
- tick
-
-  ;1 tick = 1 minute (i.e., every thick equals 1/60th of the solar-power-yield of that hour, and may be added to the battery-level)
-  ;TODO: replace global variable vehicle-charging with run-time variable that determines whether buffer battery receives charging
-
-  if run-experiments? [go]
+  ;increase tick
+  tick
 
 end
 
 
-
-
 to calculate-renewable-energy-yield
+  ;calculates the renewable energy yield for the current hour based on a normal distribution with
+  ;renewable-energy-wattpeak as mean
+  ;renewable-energy-sd as standard deviation
+  ;and a scalability factor: season-scale
+
   let y 0
   ifelse hour <= 13 [
     set y  ( renewable-energy-wattpeak - ( seasonality-scale * ( 6 - ( hour / 2 )) * renewable-energy-sd) )
@@ -403,37 +329,30 @@ to calculate-renewable-energy-yield
     set y  ( renewable-energy-wattpeak + ( seasonality-scale * ( 6 - ( hour / 2 )) * renewable-energy-sd ) )
   ]
 
-
   let x 0
 
   if y > 0 [ set x y]
 
   let variation renewable-energy-sd * renewable-energy-sd
-
   let n-prop-max (1 / sqrt ( 2 * pi * variation) )
-
   let b ((x - renewable-energy-wattpeak) * (x - renewable-energy-wattpeak)) / ( 2 * variation)
-
   let n-prop (n-prop-max * exp (-1 * b))
-
   let p-i-green  (n-prop / n-prop-max)
 
 
-  ; set yield per minute (tick)
+  ; set yield per hour and per minute (tick)
   set renewable-energy-yield-per-hour (p-i-green * renewable-energy-wattpeak)
   set renewable-energy-yield renewable-energy-yield-per-hour / 60
-
-  ;show renewable-energy-yield
-
 
 end
 
 
 
 to calculate-power-streams [demand-quantity]
-  ; function that calculates power streams based on the ademand from the charging station and supply from wind and solar energy
+  ; function that calculates power flows based on the demand from the charging station and supply from wind and solar energy
   ; also sets global variables that are uses to visualize the power streams in visualize-power-streams
 
+  ;reset global variables
   set renewable-for-consumption 0
   set battery-for-consumption 0
   set grid-for-consumption 0
@@ -450,7 +369,6 @@ to calculate-power-streams [demand-quantity]
 
     ;there is supply from renewable sources
     ifelse renewable-energy-yield > 0 [
-
 
       ;check if there is a battery and battery is not full
       ifelse buffer-battery? and buffer-battery-level < buf-bat-cap[
@@ -553,11 +471,8 @@ to calculate-power-streams [demand-quantity]
           ;supply power from grid to charging station
           set grid-power-to-charging-station? True
           set battery-power-to-charging-station? False
-
         ]
-
       ]
-
     ]
     ;there is no supply from renewable sources
     [
@@ -575,33 +490,25 @@ to calculate-power-streams [demand-quantity]
         set grid-power-to-charging-station? True
         set battery-power-to-charging-station? False
       ]
-
-
     ]
-
   ]
-
 
 end
 
 
-
-
 to create-new-jobs
-  ;init the jobs of the first hour
+  ;creates new jobs at the beginning of every hour
 
   foreach n-values number-of-jobs-per-hour [i -> i] [x ->
-  ;  let counter i
     let y count jobs
 
     if y < (queue-x * queue-y) [
-
+    ;create job on a queue grid position
     ask patches with [queue-number = (y + 1)][
       sprout-jobs 1 [
       set size 5
       set shape "box"
       set color grey
-      ;set num-jobs num-jobs + 1 ;global variable indicating total number of jobs currently active
       set created-at ticks
       set assigned-worker -1
       set processed-at -1
@@ -609,41 +516,29 @@ to create-new-jobs
       ]
     ]
 
+    ;if all positions in the grid are occupied, create job on the last position of the grid
     if y >= (queue-x * queue-y) [
     ask patches with [queue-number = (queue-x * queue-y) ] [
       sprout-jobs 1 [
       set size 5
       set shape "box"
       set color grey
-      ;set num-jobs num-jobs + 1 ;global variable indicating total number of jobs currently active
       set created-at ticks
       set assigned-worker -1
       set processed-at -1
       set queue-grid-position queue-number]
 
-      set jobs-on-last-grid-pos count jobs-here
+      set jobs-on-last-grid-pos count jobs-here ;update number of jobs on last position of grid
       ]
     ]
   ]
-
-  ;foreach (n-values number-of-jobs-per-hour [i -> 5 * i + y-cor-jobs]) [ x ->
-  ;  ask patch x-cor-jobs x [
-  ;    sprout-jobs 1 [ set size 5
-  ;      set shape "box"
-  ;      set color grey
-  ;      set num-jobs num-jobs + 1 ;global variable indicating total number of jobs currently active
-  ;      set created-at 0
-  ;      set assigned-worker -1
-  ;    ]
-  ;  ]
-  ;]
 end
 
 ;at every tick -> check if worker will process job (transition from passive to active)
 to assign-workers-to-jobs
   if ticks mod frequency = 0[
 
-  ask workers with [worker-battery-level > min-charge][
+  ask workers with [worker-battery-level > energy-consumption][
     ;get random number between 0 and 100 for all non-active workers
 
     ifelse algorithm = "fixed probability"[
@@ -691,65 +586,28 @@ to assign-workers-to-jobs
 
         ;reset probability
         set prop-current-worker 0
-        ;show prop-current-worker
+
         ;STEP 1: Solar stimulus
         ;Get fitness of current hour of sun production (= % of maximum yield)
-        ;let current-sun-fitness (current-solar-power / solar-energy-yield )
-        set stimulus-solar (renewable-energy-yield * 60 ) / renewable-energy-wattpeak
+        let stimulus-solar (renewable-energy-yield * 60 ) / renewable-energy-wattpeak
         set prop-current-worker prop-current-worker + (param-energy * stimulus-solar)
 
-
-        ;let current-hour-relative-to-noon ((hour - 12) / 12)
-
-        ;ifelse current-hour-relative-to-noon < 0[
-          ; BEFORE noon
-         ; set stimulus-solar current-sun-fitness + (param-hour-of-the-day * current-hour-relative-to-noon)
-
-          ;if stimulus-solar < 0 [set stimulus-solar 0]
-          ;show stimulus-solar
-        ;  set prop-current-worker prop-current-worker + (param-energy * stimulus-solar)
-        ;]
-        ;[; AFTER NOON
-        ;  set stimulus-solar current-sun-fitness + (param-hour-of-the-day * current-hour-relative-to-noon)
-
-         ; if stimulus-solar > 1 [set stimulus-solar 1]
-          ;show stimulus-solar
-         ; set prop-current-worker prop-current-worker + (param-energy * stimulus-solar)
-        ;]
         ;STEP 2: battery stimulus
-        ;show worker-battery-level
-        ;let stimulus-battery (1 / worker-battery-level)
         let stimulus-battery 1 - (worker-battery-level ^ 2) / (worker-battery-level ^ 2 + battery-treshold ^ 2)
         set prop-current-worker prop-current-worker + (param-battery * stimulus-battery)
 
-        ;show "worker battery"
-        ;show worker-battery-level
-        ;show "stimulus battery"
-        ;show prop-current-worker
-
-        ;show prop-current-worker
         ;STEP 3: job-queue stimulus
         let waiting-jobs (num-jobs - num-active-workers)
         let stimulus-jobs (waiting-jobs ^ 2 / (waiting-jobs ^ 2 + job-threshold ^ 2)) ;REMARK: power = 2
         set prop-current-worker prop-current-worker + (param-jobs * (1 - stimulus-jobs))
 
-        ;show "waiting jobs"
-        ;show waiting-jobs
-        ;show "stimulus jobs"
-        ;show stimulus-jobs
-        ;final probability of going to the charging
-
         let rand-number random 100
-        ;show "random number"
-        ;show rand-number
-        ;show "probability worker"
-        ;show 100 * (1 - prop-current-worker)
+
         ;draw random number to determine whether working is going to work (= 1 minus probability of going to charger)
         if rand-number < (100 * (1 - prop-current-worker)) and active? = False [
 
           ;first sort jobs who still need to be processed on 'who' (=uniqueID, higher the number the later the worker is created)
           let sorted-jobs sort-on [who] jobs with [assigned-worker = -1]
-
 
           ;check if there are still jobs that need to be processed
           if length sorted-jobs > 0 [
@@ -777,7 +635,6 @@ to assign-workers-to-jobs
             set current-job first sorted-jobs
           ]
         ]
-
       ]
     ]
   ]
@@ -788,9 +645,8 @@ end
 
 ;prodecure to determine the hour of the day
 to set-hour
-    ask patch -67 67 [set plabel hour] ;print hour of the day on patch  ;HARDCODE
+    ask patch -67 67 [set plabel hour] ;print hour of the day on patch
 end
-
 
 
 ;remove job after it has been processed
@@ -800,29 +656,25 @@ to finish-job
   foreach jobs-to-finish
   [job-to-finish -> ask job-to-finish [
     ask worker assigned-worker [
-      set active? False
-     ; set num-active-workers num-active-workers - 1
-      set current-job -1
-      setxy charging-x-cor charging-y-cor
+      set active? False ;worker is no longer active
+      set current-job -1 ;disconnect job
+      setxy charging-x-cor charging-y-cor ;move worker to charging station
     ]
-    die]
-    re-order-joblist
+    die ;delete the finished job
+    ]
+    re-order-joblist ;re-order joblist
   ]
-
-
 end
 
 ;after finished jobs are removed, re-order jobs on queue grid
 to re-order-joblist
 
   ask jobs with [queue-grid-position < 25][
-    set-job-to-queue self queue-grid-position - 1
+    set-job-to-queue self queue-grid-position - 1 ;move job one position
   ]
 
-
-
   ; patch of last position in job queue
-  ask patch (x-cor-jobs + (queue-x - 1) * queue-increment) (y-cor-jobs + (queue-y - 1) * queue-increment)  [ ;HARDCODE WILL NEVER DIE!!!
+  ask patch (x-cor-jobs + (queue-x - 1) * queue-increment) (y-cor-jobs + (queue-y - 1) * queue-increment)  [
     let jobs-at-queue-25 count jobs-here
     ifelse jobs-at-queue-25 >= 1[
         ask patch (x-cor-jobs + (queue-x )  * queue-increment + 3) (y-cor-jobs + (queue-y - 1) * queue-increment) [ ;label next to last position of job queue
@@ -845,6 +697,8 @@ end
 
 
 to set-job-to-queue [job-to-set queue-position]
+;sets the job-to-set to a specific position in the queue
+;called when a job is finished and remaining jobs needed to be reordered
 
   ask patches with [queue-number = queue-position] [
      let x-cor pxcor
@@ -857,16 +711,16 @@ to set-job-to-queue [job-to-set queue-position]
       if assigned-worker > -1 [
         ask worker assigned-worker  [
         setxy x-cor y-cor
-        ]
+       ]
      ]
-    ]
+   ]
  ]
 
 end
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;visuals;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;VISUALS;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to init-visuals
@@ -928,10 +782,6 @@ to init-visuals
   if buffer-battery? [
     create-power-cable -8 8 -5 -5 "y" "to-battery"
     create-power-cable battery-energy-source-x battery-energy-source-y 10 -6 "x" "from-battery"
-    if price-mechanism? [
-      create-power-cable 9 -5 9 9 "x" "from-battery-to-grid"
-      create-power-cable -8 15 -8 11 "y" "from-grid-to-battery"
-    ]
     create-power-cable 9 -7 -57 -12 "y" "from-battery-to-charge"
 
   ]
@@ -946,6 +796,7 @@ to init-visuals
 
 
 end
+
 
 to update-visuals
 
@@ -1130,7 +981,6 @@ to visualize-power-streams
 end
 
 
-
 to visualize-power [power-color from-power-cable to-power-cables]
 
 
@@ -1202,8 +1052,6 @@ to generate-wind-power
 end
 
 
-
-
 to generate-grid-power
 
 
@@ -1215,7 +1063,6 @@ to generate-grid-power
   ]
 
 end
-
 
 
 to generate-battery-power
@@ -1268,7 +1115,6 @@ to reset-horizon
 end
 
 
-
 to create-clouds
   ;keep y-pos fixed, make x-pos variable, move 10 patches to left every hour
 
@@ -1285,7 +1131,6 @@ to create-clouds
 end
 
 
-
 to create-horizon [y-pos]
 
   let x-pos min-pxcor
@@ -1297,6 +1142,7 @@ to create-horizon [y-pos]
 
 
 end
+
 
 to create-charging-area
 
@@ -1342,6 +1188,7 @@ to create-job-area
 
 
 end
+
 
 to create-power-cable [x-start y-start x-end y-end dir-first name]
 
@@ -1436,6 +1283,7 @@ to create-power-cable [x-start y-start x-end y-end dir-first name]
   ]
 
 end
+
 
 to create-grid [x-start-grid y-start-grid]
   ask patch (x-start-grid) ( y-start-grid) [set pcolor 8]
@@ -2313,6 +2161,7 @@ to create-sun
 
 end
 
+
 to create-windmill [x-start-windmill y-start-windmill]
 
   ask patch (x-start-windmill) (y-start-windmill - 1) [ set pcolor white ]
@@ -2579,6 +2428,7 @@ to create-windmill [x-start-windmill y-start-windmill]
 
 end
 
+
 to create-battery [x-start-battery y-start-battery]
 
 
@@ -2741,6 +2591,7 @@ to create-battery [x-start-battery y-start-battery]
   ask patch (x-start-battery + 4 ) (y-start-battery - 15) [ set pcolor 106 ]
 
 end
+
 
 to create-charge-station [ x-start-charge-station y-start-charge-station]
 
@@ -3330,9 +3181,9 @@ PENS
 
 SLIDER
 11
-535
+496
 261
-568
+529
 buffer-battery-capacity
 buffer-battery-capacity
 0
@@ -3481,21 +3332,6 @@ charging-speed
 (% of battery per hour)
 HORIZONTAL
 
-SLIDER
-11
-396
-258
-429
-min-charge
-min-charge
-0
-100
-20.0
-1
-1
-% of battery
-HORIZONTAL
-
 CHOOSER
 280
 552
@@ -3545,7 +3381,7 @@ job-threshold
 job-threshold
 0
 25
-3.0
+1.0
 1
 1
 NIL
@@ -3605,8 +3441,8 @@ frequency
 frequency
 0
 120
-30.0
-1
+15.0
+5
 1
 NIL
 HORIZONTAL
@@ -3631,9 +3467,9 @@ PENS
 
 SLIDER
 11
-442
+403
 257
-475
+436
 worker-battery-capacity
 worker-battery-capacity
 100
@@ -3646,9 +3482,9 @@ HORIZONTAL
 
 SWITCH
 12
-488
+449
 259
-521
+482
 buffer-battery
 buffer-battery
 0
@@ -3664,7 +3500,7 @@ battery-treshold
 battery-treshold
 0
 100
-20.0
+50.0
 10
 1
 NIL
